@@ -140,18 +140,32 @@ export function apply(ctx: Context) {
     }
   });
 
-  // 获取 qunConfig 配置
-  ctx.console.addListener('get-qun-config', async () => {
-    try {
-      const { userId } = await getUserQQ(this);
-      const data = await ctx.database.get('qunConfig', { ownerId: userId });
-      logger.info(`用户 ${userId} 获取 qunConfig 配置成功:`, data);
-      return data;
-    } catch (error) {
-      logger.error('获取 qunConfig 配置失败:', error);
-      throw error;
-    }
-  });
+ctx.console.addListener('get-qun-config', async function () {
+  // 获取当前 Client 对象
+  const client = this as Client;
+  if (!client) {
+    throw new Error('无法获取客户端对象');
+  }
+
+  try {
+    // 根据 Client 获取当前用户的 QQ 号
+    const { userQQ } = await getUserQQ(client);
+
+    // 从数据库获取与该 QQ 号相关的群配置
+    const data = await ctx.database.get('qunConfig', { ownerId: userQQ });
+
+    // 日志记录
+    logger.info(`用户 QQ ${userQQ} 获取到的 qunConfig 配置数据:`, data);
+
+    // 返回数据给客户端
+    return data || [];
+  } catch (error) {
+    logger.error('获取 qunConfig 配置失败:', error);
+    throw error;
+  }
+});
+
+
 
   // 更新 qunVerify 配置
   ctx.console.addListener('update-qun-verify', async (data: Record<string, any>) => {
