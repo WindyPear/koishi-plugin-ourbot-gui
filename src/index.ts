@@ -1,7 +1,7 @@
 import { Context, Logger, Schema } from 'koishi';
 import { resolve } from 'path';
 import { DataService, Client } from '@koishijs/plugin-console';
-
+import type { OneBotBot } from 'koishi-plugin-adapter-onebot';
 // 创建 Logger 实例
 const logger = new Logger('ourbot-gui');
 
@@ -80,53 +80,52 @@ export function apply(ctx: Context) {
     return { userId, userQQ: bindingData[0].pid };
   }
 
-  // 服务类定义，用于主动获取数据
-  class QunConfigProvider extends DataService<QunConfig[]> {
-    constructor(ctx: Context) {
-      super(ctx, 'qunConfig');
-    }
-    async get() {
-      const data = await ctx.database.get('qunConfig', {});
-      logger.info('获取所有验证配置:', data);
-      return data;
+// 更新 qunConfig 配置
+ctx.console.addListener('update-qun-config', async function (data: Record<string, any>) {
+  const client = this as Client;
+  if (!client) throw new Error('无法获取客户端对象');
+  let oneBot: OneBotBot<Context> | null = null;
+
+  for (const bot of ctx.bots) {
+    if (bot.platform === 'onebot') {
+      oneBot = bot as OneBotBot<Context>;
+      break; // 找到一个 OneBot 实例后可以退出循环
     }
   }
+  try {
+    const { userQQ } = await getUserQQ(client);
+    logger.info(`用户 QQ ${userQQ} 请求更新 qunConfig 配置:`, data);
 
-  // 注册服务
-  ctx.plugin(QunConfigProvider);
+    for (const key in data) {
+      const id = parseInt(key, 10);
+      const item = data[key];
 
-  // 更新 qunConfig 配置
-  ctx.console.addListener('update-qun-config', async function (data: Record<string, any>) {
-    const client = this as Client;
-    if (!client) throw new Error('无法获取客户端对象');
+      if (!id) throw new Error(`配置的群号不能为空: ${key}`);
+      
+      // 只检查是否为群主，而不检查 ownerId
+      const groupOwner = await oneBot.internal.getGroupMemberInfo(id,userQQ);
 
-    try {
-      const { userQQ } = await getUserQQ(client);
-      logger.info(`用户 QQ ${userQQ} 请求更新 qunConfig 配置:`, data);
-
-      for (const key in data) {
-        const id = parseInt(key, 10);
-        const item = data[key];
-
-        if (!id) throw new Error(`配置的群号不能为空: ${key}`);
-        if (item.ownerId !== userQQ) throw new Error(`无权限修改群号 ${id} 的配置，ownerId 不匹配`);
-
-        await ctx.database.upsert('qunConfig', [
-          {
-            id,
-            ownerId: userQQ,
-            members: item.members || {},
-          },
-        ]);
+      if (groupOwner.role !== 'owner') {
+        logger.error(`用户 QQ ${userQQ} 不是群号 ${id} 的群主`);
+        throw new Error(`用户 QQ ${userQQ} 不是群号 ${id} 的群主`);
       }
 
-      logger.success(`用户 QQ ${userQQ} 成功更新 qunConfig 配置`);
-      return { success: true };
-    } catch (error) {
-      logger.error('更新 qunConfig 配置失败:', error);
-      throw error;
+      await ctx.database.upsert('qunConfig', [
+        {
+          id,
+          ownerId: userQQ,
+          members: item.members || {},
+        },
+      ]);
     }
-  });
+
+    logger.success(`用户 QQ ${userQQ} 成功更新 qunConfig 配置`);
+    return { success: true };
+  } catch (error) {
+    logger.error('更新 qunConfig 配置失败:', error);
+    throw error;
+  }
+});
 
   // 获取 qunConfig 配置
   ctx.console.addListener('get-qun-config', async function () {
