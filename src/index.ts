@@ -15,23 +15,22 @@ declare module 'koishi' {
 
 declare module '@koishijs/plugin-console' {
   interface Events {
-    'get-qun-config'(): string[]
+    'get-qun-config'(): string[]; // 获取群配置
   }
 }
+
 // 定义表结构接口
 export interface QunConfig {
-  id: number;
-  groupId: number;
-  ownerId: number;
-  members: Record<string, any>;
+  id: number; // 群号
+  ownerId: number; // 群主 QQ
+  members: Record<string, any>; // 成员列表
 }
 
 export interface QunVerify {
-  id: number;
-  captchaSize: number;
-  expireTime: number;
+  id: number; // 群号
+  captchaSize: number; // 验证码大小
+  expireTime: number; // 验证码过期时间
 }
-
 
 // 定义插件名称和配置项
 export const name = 'ourbot-gui';
@@ -42,15 +41,14 @@ export function apply(ctx: Context) {
 
   // 扩展数据库表结构
   ctx.model.extend('qunConfig', {
-    id: 'unsigned',
-    groupId: 'unsigned',
-    ownerId: 'unsigned',
-    members: 'json',
+    id: { type: 'unsigned', primary: true }, // 群号作为主键
+    ownerId: 'unsigned', // 群主 QQ
+    members: 'json', // 成员列表
   });
   ctx.model.extend('qunVerify', {
-    id: 'unsigned',
-    captchaSize: { type: 'integer', initial: 6 },
-    expireTime: { type: 'integer', initial: 300 },
+    id: { type: 'unsigned', primary: true }, // 群号作为主键
+    captchaSize: { type: 'integer', initial: 6 }, // 默认验证码大小
+    expireTime: { type: 'integer', initial: 300 }, // 默认验证码过期时间
   });
   logger.info('数据表结构加载完成');
 
@@ -85,54 +83,44 @@ export function apply(ctx: Context) {
   // 服务类定义，用于主动获取数据
   class QunConfigProvider extends DataService<QunConfig[]> {
     constructor(ctx: Context) {
-      super(ctx, 'qunConfig')
+      super(ctx, 'qunConfig');
     }
     async get() {
-      const data = await ctx.database.get('qunConfig', {})
-      logger.info('获取所有验证配置:', data)
-      return data
+      const data = await ctx.database.get('qunConfig', {});
+      logger.info('获取所有验证配置:', data);
+      return data;
     }
   }
 
   // 注册服务
-  ctx.plugin(QunConfigProvider)
+  ctx.plugin(QunConfigProvider);
 
-  
   // 更新 qunConfig 配置
-  ctx.console.addListener('update-qun-config', async (data: Record<string, any>, client: any) => {
-    try {
-      const { userId } = await getUserQQ(this);
-      logger.info(`用户 ${userId} 请求更新 qunConfig 配置:`, data);
+  ctx.console.addListener('update-qun-config', async function (data: Record<string, any>) {
+    const client = this as Client;
+    if (!client) throw new Error('无法获取客户端对象');
 
-      // 验证群配置的合法性
+    try {
+      const { userQQ } = await getUserQQ(client);
+      logger.info(`用户 QQ ${userQQ} 请求更新 qunConfig 配置:`, data);
+
       for (const key in data) {
+        const id = parseInt(key, 10);
         const item = data[key];
-        const groupId = parseInt(key, 10);
-        if (!groupId || !item?.groupId) {
-          throw new Error(`配置的群号不能为空: ${key}`);
-        }
-        if (item.ownerId !== userId) {
-          throw new Error(`无权限修改群号 ${groupId} 的配置，ownerId 不匹配`);
-        }
+
+        if (!id) throw new Error(`配置的群号不能为空: ${key}`);
+        if (item.ownerId !== userQQ) throw new Error(`无权限修改群号 ${id} 的配置，ownerId 不匹配`);
+
+        await ctx.database.upsert('qunConfig', [
+          {
+            id,
+            ownerId: userQQ,
+            members: item.members || {},
+          },
+        ]);
       }
 
-      // 更新或插入配置数据
-      const configData = Object.keys(data).map((key) => ({
-        id: parseInt(key, 10),
-        groupId: data[key].groupId,
-        ownerId: userId,
-        members: data[key].members || {},
-      }));
-      await ctx.database.upsert('qunConfig', (row) =>
-        configData.map((item) => ({
-          id: item.id,
-          groupId: item.groupId,
-          ownerId: item.ownerId,
-          members: item.members,
-        }))
-      );
-
-      logger.success(`用户 ${userId} 成功更新 qunConfig 配置`);
+      logger.success(`用户 QQ ${userQQ} 成功更新 qunConfig 配置`);
       return { success: true };
     } catch (error) {
       logger.error('更新 qunConfig 配置失败:', error);
@@ -140,51 +128,54 @@ export function apply(ctx: Context) {
     }
   });
 
-ctx.console.addListener('get-qun-config', async function () {
-  // 获取当前 Client 对象
-  const client = this as Client;
-  if (!client) {
-    throw new Error('无法获取客户端对象');
-  }
+  // 获取 qunConfig 配置
+  ctx.console.addListener('get-qun-config', async function () {
+    const client = this as Client;
+    if (!client) throw new Error('无法获取客户端对象');
 
-  try {
-    // 根据 Client 获取当前用户的 QQ 号
-    const { userQQ } = await getUserQQ(client);
+    try {
+      const { userQQ } = await getUserQQ(client);
 
-    // 从数据库获取与该 QQ 号相关的群配置
-    const data = await ctx.database.get('qunConfig', { ownerId: userQQ });
+      const data = await ctx.database.get('qunConfig', { ownerId: userQQ });
 
-    // 日志记录
-    logger.info(`用户 QQ ${userQQ} 获取到的 qunConfig 配置数据:`, data);
-
-    // 返回数据给客户端
-    return data || [];
-  } catch (error) {
-    logger.error('获取 qunConfig 配置失败:', error);
-    throw error;
-  }
-});
-
-
+      logger.info(`用户 QQ ${userQQ} 获取到的 qunConfig 配置数据:`, data);
+      return data || [];
+    } catch (error) {
+      logger.error('获取 qunConfig 配置失败:', error);
+      throw error;
+    }
+  });
 
   // 更新 qunVerify 配置
-  ctx.console.addListener('update-qun-verify', async (data: Record<string, any>) => {
+  ctx.console.addListener('update-qun-verify', async function (data: Record<string, any>) {
+    const client = this as Client;
+    if (!client) throw new Error('无法获取客户端对象');
+
     try {
-      logger.info('接收到更新 qunVerify 配置请求:', data);
-      await ctx.database.remove('qunVerify', {});
-      const verifyData = Object.keys(data).map((key) => ({
-        id: parseInt(key, 10),
-        captchaSize: data[key].captchaSize || 6,
-        expireTime: data[key].expireTime || 300,
-      }));
-      await ctx.database.upsert('qunVerify', (row) =>
-        verifyData.map((item) => ({
-          id: item.id,
-          captchaSize: item.captchaSize,
-          expireTime: item.expireTime,
-        }))
-      );
-      logger.success('qunVerify 配置更新成功');
+      const { userQQ } = await getUserQQ(client);
+      logger.info(`用户 QQ ${userQQ} 请求更新 qunVerify 配置:`, data);
+
+      for (const key in data) {
+        const id = parseInt(key, 10);
+        const item = data[key];
+
+        if (!id) throw new Error(`配置的群号不能为空: ${key}`);
+
+        // 确认用户是否有权限
+        const relatedConfig = await ctx.database.get('qunConfig', { id });
+        if (!relatedConfig.length) throw new Error(`群号 ${id} 不存在关联的 qunConfig`);
+        if (relatedConfig[0].ownerId !== userQQ) throw new Error(`无权限修改群号 ${id} 的配置`);
+
+        await ctx.database.upsert('qunVerify', [
+          {
+            id,
+            captchaSize: item.captchaSize || 6,
+            expireTime: item.expireTime || 300,
+          },
+        ]);
+      }
+
+      logger.success(`用户 QQ ${userQQ} 成功更新 qunVerify 配置`);
       return { success: true };
     } catch (error) {
       logger.error('更新 qunVerify 配置失败:', error);
@@ -193,11 +184,24 @@ ctx.console.addListener('get-qun-config', async function () {
   });
 
   // 获取 qunVerify 配置
-  ctx.console.addListener('get-qun-verify', async () => {
+  ctx.console.addListener('get-qun-verify', async function () {
+    const client = this as Client;
+    if (!client) throw new Error('无法获取客户端对象');
+
     try {
-      const data = await ctx.database.get('qunVerify', {});
-      logger.info('获取 qunVerify 配置成功:', data);
-      return data;
+      const { userQQ } = await getUserQQ(client);
+
+      // 获取与用户相关的 qunConfig
+      const relatedConfigs = await ctx.database.get('qunConfig', {});
+      const accessibleGroups = relatedConfigs
+        .filter(config => config.ownerId === userQQ || (config.members && config.members[userQQ]))
+        .map(config => config.id);
+
+      // 获取 qunVerify 中对应的配置
+      const data = await ctx.database.get('qunVerify', { id: accessibleGroups });
+
+      logger.info(`用户 QQ ${userQQ} 获取到的 qunVerify 配置数据:`, data);
+      return data || [];
     } catch (error) {
       logger.error('获取 qunVerify 配置失败:', error);
       throw error;
